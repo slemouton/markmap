@@ -23,3 +23,7 @@ Markmap is also available in:
 ## Usage
 
 👉 [Read the documentation](https://markmap.js.org/docs) for more detail.
+
+
+## building and testing :
+- cf .claude/SKILL.md

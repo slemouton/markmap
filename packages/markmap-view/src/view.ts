@@ -1,5 +1,12 @@
 import type * as d3 from 'd3';
 import {
+  drag,
+  forceCollide,
+  forceLink,
+  forceManyBody,
+  forceSimulation,
+  forceX,
+  forceY,
   linkHorizontal,
   max,
   min,
@@ -20,7 +27,18 @@ import {
   noop,
   walkTree,
 } from 'markmap-common';
-import { defaultOptions, isMacintosh } from './constants';
+import {
+  FORCE_ALPHA_DRAG,
+  FORCE_ALPHA_RENDER,
+  FORCE_CENTER_STRENGTH,
+  FORCE_CHARGE_STRENGTH,
+  FORCE_COLLIDE_PADDING,
+  FORCE_COLLIDE_STRENGTH,
+  FORCE_LINK_DISTANCE,
+  FORCE_LINK_STRENGTH,
+  defaultOptions,
+  isMacintosh,
+} from './constants';
 import css from './style.css?inline';
 import {
   ID3SVGElement,
@@ -29,6 +47,56 @@ import {
   IPadding,
 } from './types';
 import { childSelector, simpleHash } from './util';
+
+interface IForceNodeDatum extends d3.SimulationNodeDatum {
+  key: string;
+  /** Measured HTML content size, kept in sync every render for collision radius. */
+  size: [width: number, height: number];
+}
+
+interface IForceLinkDatum {
+  source: IForceNodeDatum;
+  target: IForceNodeDatum;
+}
+
+interface IForceTickSelections {
+  mmGMerge: d3.Selection<SVGGElement, INode, any, any>;
+  mmLineMerge: d3.Selection<SVGLineElement, INode, any, any>;
+  mmCircleMerge: d3.Selection<SVGCircleElement, INode, any, any>;
+  mmFoMerge: d3.Selection<SVGForeignObjectElement, INode, any, any>;
+  mmPathMerge: d3.Selection<
+    SVGPathElement,
+    { source: INode; target: INode },
+    any,
+    any
+  >;
+  highlightNodes: d3.Selection<
+    SVGRectElement,
+    { x: number; y: number; width: number; height: number },
+    any,
+    any
+  >;
+}
+
+/**
+ * Find the point where the ray from a rect's center toward (dx, dy) exits
+ * the rect, so force-mode link lines stop at each node's box edge instead
+ * of cutting through its text.
+ */
+function clipPointToRect(
+  cx: number,
+  cy: number,
+  halfWidth: number,
+  halfHeight: number,
+  dx: number,
+  dy: number,
+): [number, number] {
+  if (!dx && !dy) return [cx, cy];
+  const tx = dx ? halfWidth / Math.abs(dx) : Infinity;
+  const ty = dy ? halfHeight / Math.abs(dy) : Infinity;
+  const t = Math.min(tx, ty);
+  return [cx + dx * t, cy + dy * t];
+}
 
 export const globalCSS = css;
 
@@ -68,6 +136,16 @@ export class Markmap {
   private _observer: ResizeObserver;
 
   private _disposeList: (() => void)[] = [];
+
+  private _forceSim?: d3.Simulation<IForceNodeDatum, IForceLinkDatum>;
+
+  private _forceNodeMap = new Map<string, IForceNodeDatum>();
+
+  private _forceNodes: INode[] = [];
+
+  private _forceDrag?: d3.DragBehavior<SVGGElement, INode, unknown>;
+
+  private _forceTickSelections?: IForceTickSelections;
 
   constructor(
     svg: string | SVGElement | ID3SVGElement,
@@ -212,9 +290,8 @@ export class Markmap {
     return node as INode;
   }
 
-  private _relayout() {
+  private _measureSizes() {
     if (!this.state.data) return;
-
     this.g
       .selectAll<SVGGElement, INode>(childSelector<SVGGElement>(SELECTOR_NODE))
       .selectAll<SVGForeignObjectElement, INode>(
@@ -225,6 +302,10 @@ export class Markmap {
         const newSize: [number, number] = [el.scrollWidth, el.scrollHeight];
         d.state.size = newSize;
       });
+  }
+
+  private _relayoutTree() {
+    if (!this.state.data) return;
 
     const { lineWidth, paddingX, spacingHorizontal, spacingVertical } =
       this.options;
@@ -270,7 +351,211 @@ export class Markmap {
     };
   }
 
+  private _setupForceSimulation() {
+    if (this._forceSim) return;
+    this._forceSim = forceSimulation<IForceNodeDatum>()
+      .force(
+        'link',
+        forceLink<IForceNodeDatum, IForceLinkDatum>([])
+          .id((d) => d.key)
+          .distance(FORCE_LINK_DISTANCE)
+          .strength(FORCE_LINK_STRENGTH),
+      )
+      .force(
+        'charge',
+        forceManyBody<IForceNodeDatum>().strength(FORCE_CHARGE_STRENGTH),
+      )
+      .force(
+        'collide',
+        forceCollide<IForceNodeDatum>()
+          .radius(
+            (d) => Math.hypot(d.size[0], d.size[1]) / 2 + FORCE_COLLIDE_PADDING,
+          )
+          .strength(FORCE_COLLIDE_STRENGTH),
+      )
+      .force('x', forceX<IForceNodeDatum>(0).strength(FORCE_CENTER_STRENGTH))
+      .force('y', forceY<IForceNodeDatum>(0).strength(FORCE_CENTER_STRENGTH))
+      .on('tick', this._handleForceTick);
+
+    this._forceDrag = drag<SVGGElement, INode>()
+      .on('start', (event, d) => {
+        if (!event.active)
+          this._forceSim?.alphaTarget(FORCE_ALPHA_DRAG).restart();
+        const fd = this._forceNodeMap.get(d.state.key);
+        if (fd) {
+          fd.fx = fd.x;
+          fd.fy = fd.y;
+        }
+      })
+      .on('drag', (event, d) => {
+        const fd = this._forceNodeMap.get(d.state.key);
+        if (fd) {
+          fd.fx = event.x;
+          fd.fy = event.y;
+        }
+      })
+      .on('end', (event, d) => {
+        if (!event.active) this._forceSim?.alphaTarget(0);
+        const fd = this._forceNodeMap.get(d.state.key);
+        if (fd) {
+          fd.fx = null;
+          fd.fy = null;
+        }
+      });
+  }
+
+  private _teardownForceSimulation() {
+    this._forceSim?.stop();
+    this._forceSim = undefined;
+    this._forceDrag = undefined;
+    this._forceNodeMap.clear();
+    this._forceNodes = [];
+    this._forceTickSelections = undefined;
+  }
+
+  private _updateForceSimulation(
+    nodes: INode[],
+    links: { source: INode; target: INode }[],
+    parentMap: Record<number, number>,
+  ) {
+    const nodeByStateId: Record<number, INode> = {};
+    nodes.forEach((node) => {
+      nodeByStateId[node.state.id] = node;
+    });
+
+    const liveKeys = new Set(nodes.map((node) => node.state.key));
+    for (const key of [...this._forceNodeMap.keys()]) {
+      if (!liveKeys.has(key)) this._forceNodeMap.delete(key);
+    }
+
+    nodes.forEach((node) => {
+      let fd = this._forceNodeMap.get(node.state.key);
+      if (!fd) {
+        const parentNode = nodeByStateId[parentMap[node.state.id]];
+        const parentFd =
+          parentNode && this._forceNodeMap.get(parentNode.state.key);
+        const seedX =
+          parentFd?.x ?? node.state.rect.x + node.state.rect.width / 2;
+        const seedY =
+          parentFd?.y ?? node.state.rect.y + node.state.rect.height / 2;
+        fd = {
+          key: node.state.key,
+          size: node.state.size,
+          x: seedX + (Math.random() - 0.5) * 20,
+          y: seedY + (Math.random() - 0.5) * 20,
+        };
+        this._forceNodeMap.set(node.state.key, fd);
+      } else {
+        fd.size = node.state.size;
+      }
+    });
+
+    const simNodes = nodes.map(
+      (node) => this._forceNodeMap.get(node.state.key)!,
+    );
+    const simLinks: IForceLinkDatum[] = links.map((link) => ({
+      source: this._forceNodeMap.get(link.source.state.key)!,
+      target: this._forceNodeMap.get(link.target.state.key)!,
+    }));
+
+    const sim = this._forceSim!;
+    sim.nodes(simNodes);
+    (sim.force('link') as d3.ForceLink<IForceNodeDatum, IForceLinkDatum>).links(
+      simLinks,
+    );
+    sim.alpha(Math.max(sim.alpha(), FORCE_ALPHA_RENDER)).restart();
+  }
+
+  private _forceLinkPath(source: INode, target: INode): string {
+    const s = source.state.rect;
+    const t = target.state.rect;
+    const scx = s.x + s.width / 2;
+    const scy = s.y + s.height / 2;
+    const tcx = t.x + t.width / 2;
+    const tcy = t.y + t.height / 2;
+    const dx = tcx - scx;
+    const dy = tcy - scy;
+    const from = clipPointToRect(scx, scy, s.width / 2, s.height / 2, dx, dy);
+    const to = clipPointToRect(tcx, tcy, t.width / 2, t.height / 2, -dx, -dy);
+    return `M${from[0]},${from[1]}L${to[0]},${to[1]}`;
+  }
+
+  private _handleForceTick = () => {
+    const sel = this._forceTickSelections;
+    if (!sel) return;
+    const { lineWidth, paddingX, color } = this.options;
+
+    this._forceNodes.forEach((node) => {
+      const fd = this._forceNodeMap.get(node.state.key);
+      if (!fd) return;
+      const [contentWidth, contentHeight] = node.state.size;
+      const width = contentWidth + (contentWidth ? paddingX * 2 : 0);
+      const height = contentHeight;
+      node.state.rect = {
+        x: (fd.x ?? 0) - width / 2,
+        y: (fd.y ?? 0) - height / 2,
+        width,
+        height,
+      };
+    });
+
+    this.state.rect = {
+      x1: min(this._forceNodes, (node) => node.state.rect.x) || 0,
+      y1: min(this._forceNodes, (node) => node.state.rect.y) || 0,
+      x2:
+        max(
+          this._forceNodes,
+          (node) => node.state.rect.x + node.state.rect.width,
+        ) || 0,
+      y2:
+        max(
+          this._forceNodes,
+          (node) => node.state.rect.y + node.state.rect.height,
+        ) || 0,
+    };
+
+    sel.mmGMerge.attr(
+      'transform',
+      (d) => `translate(${d.state.rect.x},${d.state.rect.y})`,
+    );
+
+    sel.mmLineMerge
+      .attr('x1', -1)
+      .attr('x2', (d) => d.state.rect.width + 2)
+      .attr('y1', (d) => d.state.rect.height + lineWidth(d) / 2)
+      .attr('y2', (d) => d.state.rect.height + lineWidth(d) / 2)
+      .attr('stroke', (d) => color(d))
+      .attr('stroke-width', lineWidth);
+
+    sel.mmCircleMerge
+      .attr('cx', (d) => d.state.rect.width)
+      .attr('cy', (d) => d.state.rect.height + lineWidth(d) / 2)
+      .attr('r', 6)
+      .attr('stroke-width', '1.5');
+
+    sel.mmFoMerge
+      .attr('width', (d) => Math.max(0, d.state.rect.width - paddingX * 2))
+      .attr('height', (d) => d.state.rect.height)
+      .style('opacity', 1);
+
+    sel.mmPathMerge
+      .attr('stroke', (d) => color(d.target))
+      .attr('stroke-width', (d) => lineWidth(d.target))
+      .attr('d', (d) => this._forceLinkPath(d.source, d.target));
+
+    const { highlight } = this.state;
+    if (highlight) {
+      const rect = this._getHighlightRect(highlight);
+      sel.highlightNodes
+        .attr('x', rect.x)
+        .attr('y', rect.y)
+        .attr('width', rect.width)
+        .attr('height', rect.height);
+    }
+  };
+
   setOptions(opts?: Partial<IMarkmapOptions>): void {
+    const prevLayout = this.options.layout;
     this.options = {
       ...this.options,
       ...opts,
@@ -284,6 +569,20 @@ export class Markmap {
       this.svg.on('wheel', this.handlePan);
     } else {
       this.svg.on('wheel', null);
+    }
+    if (opts && 'layout' in opts && opts.layout !== prevLayout) {
+      if (opts.layout === 'force') {
+        this._setupForceSimulation();
+      } else {
+        this._teardownForceSimulation();
+        this.g
+          .selectAll<
+            SVGGElement,
+            INode
+          >(childSelector<SVGGElement>(SELECTOR_NODE))
+          .on('.drag', null);
+      }
+      if (this.state?.data) this.renderData();
     }
   }
 
@@ -385,7 +684,11 @@ export class Markmap {
     const mmGMerge = mmG
       .merge(mmGEnter)
       .attr('class', (d) =>
-        ['markmap-node', d.payload?.fold && 'markmap-fold']
+        [
+          'markmap-node',
+          d.payload?.fold && 'markmap-fold',
+          this.options.layout === 'force' && 'markmap-draggable',
+        ]
           .filter(Boolean)
           .join(' '),
       );
@@ -504,12 +807,36 @@ export class Markmap {
       maxWidth ? `${maxWidth}px` : (null as any),
     );
     await new Promise(requestAnimationFrame);
-    // Note: d.state.rect is only available after relayout
-    this._relayout();
+    // Note: d.state.rect is only available after measuring/relayout below
+    this._measureSizes();
 
     highlightNodes = highlightNodes
       .data(highlight ? [this._getHighlightRect(highlight)] : [])
       .join('rect');
+
+    if (this.options.layout === 'force') {
+      this._setupForceSimulation();
+      mmGMerge.call(this._forceDrag!);
+      mmGExit.remove();
+      mmPathExit.remove();
+
+      this._forceNodes = nodes;
+      this._forceTickSelections = {
+        mmGMerge,
+        mmLineMerge,
+        mmCircleMerge,
+        mmFoMerge,
+        mmPathMerge,
+        highlightNodes,
+      };
+      this._updateForceSimulation(nodes, links, parentMap);
+      this._handleForceTick();
+      return;
+    }
+
+    mmGMerge.on('.drag', null);
+    this._relayoutTree();
+
     this.transition(highlightNodes)
       .attr('x', (d) => d.x)
       .attr('y', (d) => d.y)
@@ -757,6 +1084,7 @@ export class Markmap {
 
   destroy() {
     this.svg.on('.zoom', null);
+    this._teardownForceSimulation();
     this.svg.html(null);
     this._disposeList.forEach((fn) => {
       fn();

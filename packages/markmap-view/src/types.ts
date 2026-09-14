@@ -41,6 +41,14 @@ export interface IMarkmapOptions {
   fitRatio: number;
   id?: string;
   initialExpandLevel: number;
+  /**
+   * The layout algorithm used to position nodes.
+   *
+   * `tree` (default) lays out nodes as a horizontal mindmap tree.
+   * `force` uses a d3-force simulation: nodes repel each other and are
+   * connected by spring-like links, and can be dragged around.
+   */
+  layout: 'tree' | 'force';
   maxInitialScale: number;
   pan: boolean;
   scrollForPan: boolean;

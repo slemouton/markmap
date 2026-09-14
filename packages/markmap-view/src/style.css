@@ -22,6 +22,13 @@
     > circle {
       cursor: pointer;
     }
+
+    &.markmap-draggable {
+      cursor: grab;
+    }
+    &.markmap-draggable:active {
+      cursor: grabbing;
+    }
   }
 
   &-foreign {

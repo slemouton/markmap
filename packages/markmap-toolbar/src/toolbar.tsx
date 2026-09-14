@@ -57,6 +57,7 @@ export class Toolbar {
     'zoomOut',
     'fit',
     'recurse',
+    'layout',
     'dark',
   ];
 
@@ -117,6 +118,19 @@ export class Toolbar {
         this.markmap?.setOptions({
           toggleRecursively: active,
         });
+      },
+    });
+    this.register({
+      id: 'layout',
+      title: 'Toggle layout (tree/force)',
+      content: Toolbar.icon('M3 2v16h14v-2h-12v-12h12v2h2v-4h-16z'),
+      onClick: (e) => {
+        const button = (e.target as HTMLDivElement).closest<HTMLDivElement>(
+          `.${clsToolbarItem}`,
+        );
+        const isForce = button?.classList.toggle('force');
+        const layout = isForce ? 'force' : 'tree';
+        this.markmap?.setOptions({ layout });
       },
     });
     this.register({
