@@ -39,23 +39,81 @@ Default behavior (opens the result in your browser):
 node bin/cli.js /path/to/input.md
 ```
 
+A ready-made test fixture lives at `packages/markmap-cli/test/input.md`
+(headings `Root` / `Branch A` / `Branch B` / `Sub-branch B1` with nested
+lists) — use it for quick smoke tests instead of writing a throwaway file:
+
+```bash
+node bin/cli.js test/input.md --no-open -o /tmp/output.html
+```
+
 Useful flags: `--offline` (inline all assets so the HTML works without
 network), `--watch` (regenerate on file change, dev only), `--port <n>`
 (dev server port), `--no-toolbar`.
+
+`--mermaid [file]` additionally writes a Mermaid syntax file (defaults to
+`<input>.mmd` if no path given); `--mermaid-type <mindmap|graph>` picks
+between a Mermaid `mindmap` diagram (default) and a `graph TD` flowchart
+with node IDs and edges:
+
+```bash
+node bin/cli.js test/input.md --no-open -o /tmp/output.html --mermaid /tmp/output.mmd --mermaid-type graph
+```
 
 Note: every invocation prints `Failed to find Response internal state key`
 to stderr. This is a harmless Node/Hono compatibility warning — it doesn't
 affect output.
 
+## Mermaid files as input
+
+Input files with a `.mmd` or `.mermaid` extension are detected
+automatically and parsed as Mermaid syntax instead of Markdown, using the
+real `mermaid` package (broad grammar support, not a hand-rolled subset).
+Only the `mindmap` and `graph`/`flowchart` diagram types convert to a
+markmap tree — other types (sequence, class, ER, gantt, pie, state, …)
+produce a clear error instead of a nonsense tree.
+
+```bash
+node bin/cli.js test/input.mmd --no-open -o /tmp/from-mindmap.html
+node bin/cli.js test/input-graph.mmd --no-open -o /tmp/from-graph.html
+```
+
+Two ready-made fixtures mirror `test/input.md`'s tree (Root/Branch
+A/Branch B/Sub-branch B1): `test/input.mmd` (`mindmap` syntax) and
+`test/input-graph.mmd` (`graph TD` syntax).
+
+Mermaid input can still be re-exported via `--mermaid`/`--mermaid-type`
+(e.g. convert a hand-written `mindmap` file to `graph` syntax) since that
+flag only depends on the parsed tree, not the original format.
+
+`--watch` is **not supported** for Mermaid input — combining them raises
+an explicit error rather than silently mis-parsing the file as Markdown.
+
 ## Verify it worked
 
 ```bash
-grep -o 'Root\|Branch A' /tmp/output.html
+grep -o 'Root\|Branch A\|Branch B\|Sub-branch B1' /tmp/output.html
 ```
 
 The generated HTML embeds the parsed markdown tree as JSON in a `<script>`
 tag — confirm your source headings/content appear there, and that a
 `<svg id="mindmap">` element exists.
+
+## Previewing the generated HTML
+
+`--no-open` skips launching a browser (useful for headless/agent runs). To
+actually look at the result on macOS:
+
+```bash
+open -a Safari /tmp/output.html      # or: open /tmp/output.html for the default browser
+```
+
+To preview inside VS Code itself (embedded "Simple Browser" tab) without
+relying on an integrated-browser tool that may prompt for permission:
+
+```bash
+open "vscode://command/simpleBrowser.show?%5B%22file:///tmp/output.html%22%5D"
+```
 
 ## Testing local, uncommitted changes to markmap-view / markmap-toolbar
 

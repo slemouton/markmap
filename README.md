@@ -27,3 +27,8 @@ Markmap is also available in:
 
 ## building and testing :
 - cf .claude/SKILL.md
+
+## examples :
+- node bin/cli.js --help
+- node bin/cli.js /Users/lemouton/My\ Drive/Notations/Hermeneutique.md
+- node bin/cli.js --mermaid --mermaid-type graph /Users/lemouton/My\ Drive/Notations/Hermeneutique.md

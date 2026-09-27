@@ -1,9 +1,11 @@
 import { readFile, writeFile } from 'fs/promises';
-import { CSSItem, JSItem, buildJSItem, mergeAssets } from 'markmap-common';
+import { CSSItem, IPureNode, JSItem, buildJSItem, mergeAssets } from 'markmap-common';
 import {
   Transformer,
   type IAssets,
+  type IFeatures,
   type IMarkmapCreateOptions,
+  type ITransformResult,
 } from 'markmap-lib';
 import { baseJsPaths, fillTemplate } from 'markmap-render';
 import open from 'open';
@@ -15,6 +17,8 @@ import {
   localProvider,
   toolbarAssets,
 } from './util/common';
+import { buildMermaid, type MermaidType } from './util/mermaid';
+import { parseMermaidToTree } from './util/mermaid-parse';
 
 export * from './types';
 export * from './util/dev-server';
@@ -66,7 +70,13 @@ async function inlineAssets(assets: IAssets): Promise<IAssets> {
 }
 
 export async function createMarkmap(
-  options: IMarkmapCreateOptions & IDevelopOptions & { open: boolean },
+  options: IMarkmapCreateOptions &
+    IDevelopOptions & {
+      open: boolean;
+      mermaid?: string;
+      mermaidType?: MermaidType;
+      mermaidInput?: boolean;
+    },
 ): Promise<void> {
   const transformer = new Transformer();
   if (options.offline) {
@@ -79,9 +89,23 @@ export async function createMarkmap(
       // ignore
     }
   }
-  const { root, features, frontmatter } = transformer.transform(
-    options.content || '',
-  );
+  let root: IPureNode;
+  let features: IFeatures = {};
+  let frontmatter: ITransformResult['frontmatter'];
+  if (options.mermaidInput) {
+    root = await parseMermaidToTree(options.content || '');
+  } else {
+    ({ root, features, frontmatter } = transformer.transform(
+      options.content || '',
+    ));
+  }
+  if (options.mermaid) {
+    await writeFile(
+      options.mermaid,
+      buildMermaid(root, options.mermaidType || 'mindmap'),
+      'utf8',
+    );
+  }
   const otherAssets = mergeAssets(
     {
       scripts: baseJsPaths.map(buildJSItem),

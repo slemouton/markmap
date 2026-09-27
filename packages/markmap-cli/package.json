@@ -49,13 +49,18 @@
     "chokidar": "^4.0.1",
     "commander": "^12.1.0",
     "hono": "^4.6.13",
+    "jsdom": "^25.0.1",
     "markmap-common": "workspace:*",
     "markmap-lib": "workspace:*",
     "markmap-render": "workspace:*",
     "markmap-toolbar": "workspace:*",
+    "mermaid": "^11.4.1",
     "open": "^10.1.0",
     "portfinder": "^1.0.32",
     "read-package-up": "^11.0.0",
     "update-notifier": "^7.3.1"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^21.1.7"
   }
 }

@@ -1,0 +1,55 @@
+{
+  "name": "markmap-vscode",
+  "displayName": "Markmap",
+  "description": "Markmap for VSCode",
+  "version": "0.1.0",
+  "author": "Your Name",
+  "license": "MIT",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:markdown",
+    "onCommand:markmap.showPreview"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "markmap.showPreview",
+        "title": "Markmap: Show Preview"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "markmap.showPreview",
+        "key": "ctrl+shift+m",
+        "mac": "cmd+shift+m",
+        "when": "editorLangId == markdown"
+      }
+    ]
+  },
+  "scripts": {
+    "clean": "del-cli dist",
+    "build:types": "tsc",
+    "build:js": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --platform=node --target=node18",
+    "watch": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --platform=node --target=node18 --watch",
+    "vscode:prepublish": "pnpm build:js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.8.3",
+    "del-cli": "^6.0.0"
+  },
+  "dependencies": {
+    "markmap-lib": "workspace:*",
+    "markmap-view": "workspace:*"
+  }
+}
